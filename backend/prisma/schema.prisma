@@ -1,0 +1,549 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum BaseRole {
+  ADMIN
+  BRANCH
+  PATIENT
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum AppointmentStatus {
+  PENDING      // Patient booked, waiting confirmation
+  CONFIRMED    // Branch confirmed
+  IN_PROGRESS  // Patient currently being treated
+  COMPLETED    // Treatment done
+  CANCELLED    // Cancelled by patient or branch
+  NO_SHOW      // Patient didn't arrive
+}
+
+enum AppointmentType {
+  ONLINE       // Booked via system
+  WALKIN       // Walk-in patient
+  PHONE        // Booked via phone call
+}
+
+enum LabRequestStatus {
+  PENDING      // Sent to lab
+  IN_PROGRESS  // Lab processing
+  COMPLETED    // Results received
+  CANCELLED
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+// ============================================
+// USER & ROLE MANAGEMENT
+// ============================================
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String?
+  googleId      String?   @unique
+  baseRole      BaseRole  @default(PATIENT)
+  
+  // Hierarchy tracking
+  isOriginal    Boolean   @default(false)  // true = root user (super admin or branch manager)
+  parentId      String?                     // Who created this user
+  parent        User?     @relation("UserHierarchy", fields: [parentId], references: [id])
+  children      User[]    @relation("UserHierarchy")
+  
+  // Profile info
+  firstName     String?
+  lastName      String?
+  phone         String?
+  avatar        String?
+  gender        Gender?
+  dateOfBirth   DateTime?
+  isActive      Boolean   @default(true)
+  
+  // Relations
+  userRoles     UserRole[]
+  managedBranch Branch?   @relation("BranchManager")
+  
+  // Patient-specific relations
+  patientProfile    PatientProfile?
+  appointments      Appointment[]     @relation("PatientAppointments")
+  
+  // Staff-specific relations
+  doctorProfile     DoctorProfile?
+  staffBranch       BranchStaff?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([baseRole])
+  @@index([email])
+  @@index([parentId])
+  @@index([isOriginal])
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  permissions String[]   // e.g. ['appointment.view', 'appointment.create', 'doctor.manage']
+  branch      Branch?    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId    String?
+  isSystem    Boolean    @default(false)  // System roles can't be deleted
+  userRoles   UserRole[]
+  createdAt   DateTime   @default(now())
+
+  @@unique([name, branchId])  // Role name unique per branch
+  @@index([branchId])
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  roleId    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// ============================================
+// PATIENT DOMAIN
+// ============================================
+
+model PatientProfile {
+  id                String    @id @default(uuid())
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String    @unique
+  
+  // Medical info
+  bloodType         String?
+  allergies         String[]
+  medicalConditions String[]
+  emergencyContact  String?
+  emergencyPhone    String?
+  
+  // Preferences
+  preferredBranch   Branch?   @relation(fields: [preferredBranchId], references: [id])
+  preferredBranchId String?
+  preferredDoctor   DoctorProfile? @relation(fields: [preferredDoctorId], references: [id])
+  preferredDoctorId String?
+  
+  // Records
+  medicalRecords    MedicalRecord[]
+  labRequests       LabRequest[]
+  
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([preferredBranchId])
+}
+
+model MedicalRecord {
+  id          String         @id @default(uuid())
+  patient     PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientId   String
+  appointment Appointment?   @relation(fields: [appointmentId], references: [id])
+  appointmentId String?      @unique
+  
+  diagnosis   String?
+  treatment   String?
+  notes       String?
+  attachments String[]       // File URLs
+  
+  createdBy   String         // Staff userId who created
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([patientId])
+}
+
+// ============================================
+// BRANCH & STAFF DOMAIN
+// ============================================
+
+model Branch {
+  id          String   @id @default(uuid())
+  name        String
+  address     String?
+  phone       String?
+  email       String?
+  isActive    Boolean  @default(true)
+  
+  // Location for future map integration
+  latitude    Float?
+  longitude   Float?
+  
+  // Manager (1:1)
+  managerId   String?  @unique
+  manager     User?    @relation("BranchManager", fields: [managerId], references: [id])
+  
+  // Relations
+  roles           Role[]
+  staff           BranchStaff[]
+  doctors         BranchDoctor[]
+  schedules       Schedule[]
+  appointments    Appointment[]
+  branchServices  BranchService[]
+  preferredBy     PatientProfile[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model BranchStaff {
+  id        String   @id @default(uuid())
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId  String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String   @unique  // Staff belongs to one branch
+  position  String?           // e.g. "Receptionist", "Nurse"
+  isActive  Boolean  @default(true)
+  
+  createdAt DateTime @default(now())
+
+  @@unique([branchId, userId])
+  @@index([branchId])
+}
+
+// ============================================
+// DOCTOR DOMAIN
+// ============================================
+
+model DoctorProfile {
+  id              String    @id @default(uuid())
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String    @unique
+  
+  licenseNumber   String?   @unique
+  specialization  String?
+  bio             String?
+  experience      Int?      // Years of experience
+  
+  // Relations
+  branches        BranchDoctor[]
+  schedules       Schedule[]
+  appointments    Appointment[]
+  preferredBy     PatientProfile[]
+  doctorServices  DoctorService[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model BranchDoctor {
+  id        String        @id @default(uuid())
+  branch    Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctorId  String
+  isActive  Boolean       @default(true)
+  
+  createdAt DateTime      @default(now())
+
+  @@unique([branchId, doctorId])
+  @@index([branchId])
+  @@index([doctorId])
+}
+
+// ============================================
+// SERVICE DOMAIN (Dental Treatments)
+// ============================================
+
+model Service {
+  id              String    @id @default(uuid())
+  name            String    @unique
+  description     String?
+  basePrice       Decimal   @db.Decimal(10, 2)
+  duration        Int       // Duration in minutes
+  category        String?   // e.g. "General", "Cosmetic", "Orthodontics"
+  isActive        Boolean   @default(true)
+  
+  // Relations
+  branchServices  BranchService[]
+  doctorServices  DoctorService[]
+  appointments    Appointment[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([category])
+  @@index([isActive])
+}
+
+model BranchService {
+  id        String   @id @default(uuid())
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId  String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String
+  
+  price     Decimal? @db.Decimal(10, 2)  // Override base price if needed
+  isActive  Boolean  @default(true)
+  
+  // Dynamic pricing rules
+  pricingRules ServicePricingRule[]
+  
+  createdAt DateTime @default(now())
+
+  @@unique([branchId, serviceId])
+  @@index([branchId])
+}
+
+// ============================================
+// DYNAMIC PRICING
+// ============================================
+
+enum PricingRuleType {
+  DAY_OF_WEEK      // Mon-Sun pricing
+  DATE_RANGE       // Holiday/special period pricing
+  TIME_SLOT        // Morning/evening pricing
+}
+
+enum PriceModifierType {
+  FIXED            // Set exact price (e.g., $25)
+  PERCENTAGE       // Add/subtract percentage (e.g., +20%)
+  FLAT_ADJUSTMENT  // Add/subtract fixed amount (e.g., +$5)
+}
+
+model ServicePricingRule {
+  id              String            @id @default(uuid())
+  branchService   BranchService     @relation(fields: [branchServiceId], references: [id], onDelete: Cascade)
+  branchServiceId String
+  
+  name            String            // "Weekend Surcharge", "Holiday Rate"
+  ruleType        PricingRuleType
+  
+  // Conditions (use based on ruleType)
+  daysOfWeek      DayOfWeek[]       // For DAY_OF_WEEK: [SATURDAY, SUNDAY]
+  startDate       DateTime?         // For DATE_RANGE: start date
+  endDate         DateTime?         // For DATE_RANGE: end date
+  startTime       String?           // For TIME_SLOT: "18:00"
+  endTime         String?           // For TIME_SLOT: "21:00"
+  
+  // Price modification
+  modifierType    PriceModifierType
+  modifierValue   Decimal           @db.Decimal(10, 2)  // Value based on modifierType
+  
+  priority        Int               @default(0)  // Higher = applied first if multiple match
+  isActive        Boolean           @default(true)
+  
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([branchServiceId])
+  @@index([isActive])
+}
+
+model DoctorService {
+  id        String        @id @default(uuid())
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctorId  String
+  service   Service       @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String
+  
+  createdAt DateTime      @default(now())
+
+  @@unique([doctorId, serviceId])
+  @@index([doctorId])
+}
+
+// ============================================
+// SCHEDULE DOMAIN
+// ============================================
+
+model Schedule {
+  id          String        @id @default(uuid())
+  branch      Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branchId    String
+  doctor      DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctorId    String
+  
+  dayOfWeek   DayOfWeek
+  startTime   String        // "09:00" format
+  endTime     String        // "17:00" format
+  
+  // Buffer time between appointments (from proposal: 5-10 mins)
+  bufferMinutes Int         @default(5)
+  slotDuration  Int         @default(30)  // Default slot in minutes
+  
+  isActive    Boolean       @default(true)
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([branchId, doctorId, dayOfWeek])
+  @@index([branchId])
+  @@index([doctorId])
+}
+
+model ScheduleBlock {
+  id          String   @id @default(uuid())
+  branchId    String
+  doctorId    String
+  
+  startDateTime DateTime
+  endDateTime   DateTime
+  reason        String?   // "Holiday", "Personal Leave", etc.
+  
+  createdAt   DateTime @default(now())
+
+  @@index([branchId, doctorId])
+  @@index([startDateTime, endDateTime])
+}
+
+// ============================================
+// APPOINTMENT DOMAIN
+// ============================================
+
+model Appointment {
+  id            String            @id @default(uuid())
+  
+  // Relations
+  patient       User              @relation("PatientAppointments", fields: [patientId], references: [id])
+  patientId     String
+  branch        Branch            @relation(fields: [branchId], references: [id])
+  branchId      String
+  doctor        DoctorProfile     @relation(fields: [doctorId], references: [id])
+  doctorId      String
+  service       Service           @relation(fields: [serviceId], references: [id])
+  serviceId     String
+  
+  // Timing
+  date          DateTime          @db.Date
+  startTime     String            // "09:00"
+  endTime       String            // "09:30"
+  
+  // Status & Type
+  status        AppointmentStatus @default(PENDING)
+  type          AppointmentType   @default(ONLINE)
+  
+  // Walk-in queue
+  tokenNumber   Int?              // For walk-in patients
+  
+  // Notes
+  patientNotes  String?           // Patient's description of issue
+  staffNotes    String?           // Internal notes
+  
+  // After completion
+  medicalRecord MedicalRecord?
+  labRequests   LabRequest[]
+  
+  // Google Calendar integration
+  calendarEventId String?
+  reminderSent    Boolean         @default(false)
+  
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([patientId])
+  @@index([branchId])
+  @@index([doctorId])
+  @@index([date])
+  @@index([status])
+  @@index([branchId, date])
+}
+
+// ============================================
+// LAB DOMAIN
+// ============================================
+
+model ExternalLab {
+  id          String       @id @default(uuid())
+  name        String
+  address     String?
+  phone       String?
+  email       String?
+  services    String[]     // Types of tests they offer
+  isActive    Boolean      @default(true)
+  
+  labRequests LabRequest[]
+  
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model LabRequest {
+  id            String           @id @default(uuid())
+  
+  patient       PatientProfile   @relation(fields: [patientId], references: [id])
+  patientId     String
+  appointment   Appointment?     @relation(fields: [appointmentId], references: [id])
+  appointmentId String?
+  lab           ExternalLab      @relation(fields: [labId], references: [id])
+  labId         String
+  
+  testType      String           // e.g. "Biopsy", "Blood Work", "X-Ray"
+  description   String?
+  status        LabRequestStatus @default(PENDING)
+  
+  // Results
+  resultFile    String?          // File URL
+  resultNotes   String?
+  resultDate    DateTime?
+  
+  requestedBy   String           // Staff userId
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([patientId])
+  @@index([status])
+  @@index([labId])
+}
+
+// ============================================
+// SETTINGS & ANALYTICS
+// ============================================
+
+model BusinessSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// For caching daily analytics (optional - for performance)
+model DailyAnalytics {
+  id              String   @id @default(uuid())
+  branchId        String?  // null = all branches
+  date            DateTime @db.Date
+  
+  totalAppointments   Int  @default(0)
+  completedAppointments Int @default(0)
+  cancelledAppointments Int @default(0)
+  noShowAppointments    Int @default(0)
+  walkinAppointments    Int @default(0)
+  
+  revenue         Decimal? @db.Decimal(10, 2)
+  
+  createdAt       DateTime @default(now())
+
+  @@unique([branchId, date])
+  @@index([date])
+}
