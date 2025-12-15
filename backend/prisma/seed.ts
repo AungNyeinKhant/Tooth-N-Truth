@@ -4,7 +4,7 @@ import {
   Permission,
   ALL_PERMISSIONS,
   PERMISSIONS,
-} from '../../shared/utils/permission.utl';
+} from '@shared/utils/permission.utl';
 
 const prisma = new PrismaClient();
 
@@ -368,7 +368,7 @@ async function main() {
       phone: '+95 9 000 000 100',
       gender: Gender.MALE,
       dateOfBirth: new Date('1990-05-15'),
-      isOriginal: true,
+      isOriginal: false,
       parentId: null,
     },
   });
