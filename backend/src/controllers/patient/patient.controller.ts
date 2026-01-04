@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Patch, Body, Param } from '@nestjs/common';
 import { Roles } from '../../core/decorators/roles.decorator';
+import { Public } from '../../core/decorators/public.decorator';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { UsersService } from '../../modules/users/users.service';
 import { AppointmentsService } from '../../modules/appointments/appointments.service';
@@ -21,6 +22,12 @@ export class PatientController {
     private readonly appointmentsService: AppointmentsService,
     private readonly servicesService: ServicesService,
   ) {}
+
+  @Get('hello')
+  @Public()
+  getHello() {
+    return 'Hello World!';
+  }
 
   // ─── PROFILE ──────────────────────────────
   /*

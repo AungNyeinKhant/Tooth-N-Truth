@@ -23,7 +23,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     } else if (exception instanceof ZodError) {
       status = HttpStatus.BAD_REQUEST;
       message = {
-        errors: (exception as ZodError).issues.map((e) => ({
+        errors: exception.issues.map((e) => ({
           field: e.path.join('.'),
           message: e.message,
         })),

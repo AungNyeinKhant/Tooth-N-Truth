@@ -41,9 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     // Flatten permissions from all roles
-    const permissions = user.userRoles.flatMap(
-      (ur) => ur.role.permissions,
-    ) as string[];
+    const permissions = user.userRoles.flatMap((ur) => ur.role.permissions);
 
     // Get branchId (staff or manager)
     const branchId =

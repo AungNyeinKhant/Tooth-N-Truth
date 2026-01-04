@@ -22,7 +22,7 @@ enum Gender {
 }
 
 enum AppointmentStatus {
-  PENDING      // Patient booked, waiting confirmation
+  
   CONFIRMED    // Branch confirmed
   IN_PROGRESS  // Patient currently being treated
   COMPLETED    // Treatment done
@@ -449,7 +449,7 @@ model Appointment {
   endTime       String            // "09:30"
   
   // Status & Type
-  status        AppointmentStatus @default(PENDING)
+  status        AppointmentStatus @default(CONFIRMED)
   type          AppointmentType   @default(ONLINE)
   
   // Walk-in queue
