@@ -3,6 +3,8 @@ import { Public } from '../../core/decorators/public.decorator';
 import { CurrentUser } from '../../core/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto';
+import { RefreshAuthGuard } from '../../core/guards/refresh.guard';
+import { UseGuards } from '@nestjs/common';
 
 @Controller('auth')
 export class AuthController {
@@ -21,6 +23,8 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
+  @Public()
+  @UseGuards(RefreshAuthGuard)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(@CurrentUser('id') userId: string) {

@@ -1,8 +1,7 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PrismaService } from 'src/core/database/prisma/prisma.service';
 import {
   JwtPayload,
   AuthenticatedUser,
@@ -10,10 +9,7 @@ import {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(
-    private config: ConfigService,
-    private prisma: PrismaService,
-  ) {
+  constructor(private config: ConfigService) {
     const secret = config.get<string>('JWT_SECRET');
     if (!secret) {
       throw new Error('JWT_SECRET is not defined in environment variables');
@@ -22,39 +18,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: secret, // ✅ TypeScript knows it's string
+      secretOrKey: secret,
     });
   }
 
+  // Stateless validation: trust the payload content
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: {
-        userRoles: { include: { role: true } },
-        staffBranch: true,
-        managedBranch: true,
-      },
-    });
-
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('User not found or inactive');
+    // Ensure it is an Access Token (must have permissions and role data)
+    if (!payload.permissions || !payload.baseRole) {
+      throw new Error('Invalid Access Token: missing permissions or role');
     }
 
-    // Flatten permissions from all roles
-    const permissions = user.userRoles.flatMap((ur) => ur.role.permissions);
-
-    // Get branchId (staff or manager)
-    const branchId =
-      user.staffBranch?.branchId || user.managedBranch?.id || null;
-
     return {
-      id: user.id,
-      email: user.email,
-      baseRole: user.baseRole,
-      isOriginal: user.isOriginal,
-      parentId: user.parentId,
-      branchId,
-      permissions: [...new Set(permissions)],
+      id: payload.sub,
+      email: payload.email!,
+      baseRole: payload.baseRole,
+      isOriginal: payload.isOriginal!,
+      parentId: payload.parentId!,
+      branchId: payload.branchId!,
+      permissions: payload.permissions,
     };
   }
 }

@@ -8,6 +8,10 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from 'src/core/database/prisma/prisma.service';
 import { BaseRole } from '@prisma/client';
 import { LoginInput, RegisterInput } from '@shared/schemas/auth.schema';
+import {
+  AuthenticatedUser,
+  JwtPayload,
+} from 'src/utils/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class AuthService {
@@ -34,7 +38,8 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    return this.generateTokens(user.id, user.email);
+    const userContext = await this.getUserContext(user.id);
+    return this.generateTokens(userContext);
   }
 
   async register(dto: RegisterInput) {
@@ -70,27 +75,70 @@ export class AuthService {
       },
     });
 
-    return this.generateTokens(user.id, user.email);
+    // Re-fetch to get full context (e.g. default permissions from role)
+    const userContext = await this.getUserContext(user.id);
+    return this.generateTokens(userContext);
   }
 
   async refreshToken(userId: string) {
+    const userContext = await this.getUserContext(userId);
+    return this.generateTokens(userContext);
+  }
+
+  /**
+   * Fetches the user and all relations needed for the JWT context.
+   * This logic was previously in JwtStrategy.validate.
+   */
+  private async getUserContext(userId: string): Promise<AuthenticatedUser> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      include: {
+        userRoles: { include: { role: true } },
+        staffBranch: true,
+        managedBranch: true,
+      },
     });
 
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Invalid user');
+      throw new UnauthorizedException('User not found or inactive');
     }
 
-    return this.generateTokens(user.id, user.email);
-  }
+    // Flatten permissions from all roles
+    const permissions = user.userRoles.flatMap((ur) => ur.role.permissions);
 
-  private generateTokens(userId: string, email: string) {
-    const payload = { sub: userId, email };
+    // Get branchId (staff or manager)
+    const branchId =
+      user.staffBranch?.branchId || user.managedBranch?.id || null;
 
     return {
-      accessToken: this.jwtService.sign(payload, { expiresIn: '1d' }),
-      refreshToken: this.jwtService.sign(payload, { expiresIn: '7d' }),
+      id: user.id,
+      email: user.email,
+      baseRole: user.baseRole,
+      isOriginal: user.isOriginal,
+      parentId: user.parentId,
+      branchId,
+      permissions: [...new Set(permissions)],
+    };
+  }
+
+  private generateTokens(user: AuthenticatedUser) {
+    const accessTokenPayload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      baseRole: user.baseRole,
+      isOriginal: user.isOriginal,
+      parentId: user.parentId,
+      branchId: user.branchId,
+      permissions: user.permissions,
+    };
+
+    const refreshTokenPayload = {
+      sub: user.id,
+    };
+
+    return {
+      accessToken: this.jwtService.sign(accessTokenPayload, { expiresIn: '45m' }),
+      refreshToken: this.jwtService.sign(refreshTokenPayload, { expiresIn: '7d' }),
     };
   }
 }
